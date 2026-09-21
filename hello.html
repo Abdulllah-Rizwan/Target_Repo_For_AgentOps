@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hello</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link
+  href="https://fonts.googleapis.com/css2?family=Inter:wght@300;600;800&display=swap"
+  rel="stylesheet"
+/>
+<style>
+  :root {
+    --bg-1: #0f172a;
+    --bg-2: #1e1b4b;
+    --bg-3: #4c1d95;
+    --accent: #a78bfa;
+    --accent-2: #38bdf8;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    display: grid;
+    place-items: center;
+    font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: #f8fafc;
+    background: linear-gradient(135deg, var(--bg-1), var(--bg-2), var(--bg-3));
+    background-size: 300% 300%;
+    animation: drift 18s ease-in-out infinite;
+    overflow: hidden;
+  }
+
+  /* Soft floating light orbs in the background */
+  .orb {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.45;
+    pointer-events: none;
+    animation: float 14s ease-in-out infinite;
+  }
+
+  .orb.one {
+    width: 22rem;
+    height: 22rem;
+    background: var(--accent);
+    top: -6rem;
+    left: -6rem;
+  }
+
+  .orb.two {
+    width: 18rem;
+    height: 18rem;
+    background: var(--accent-2);
+    bottom: -5rem;
+    right: -5rem;
+    animation-delay: -7s;
+  }
+
+  main {
+    position: relative;
+    z-index: 1;
+    text-align: center;
+    padding: 2rem;
+    animation: rise 1.2s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .wave {
+    display: inline-block;
+    font-size: clamp(2.5rem, 8vw, 4rem);
+    animation: wave 2.4s ease-in-out infinite;
+    transform-origin: 70% 70%;
+  }
+
+  h1 {
+    margin: 0.4rem 0 0.75rem;
+    font-size: clamp(3rem, 12vw, 8rem);
+    font-weight: 800;
+    line-height: 0.95;
+    letter-spacing: -0.04em;
+    background: linear-gradient(100deg, #ffffff 10%, var(--accent) 45%, var(--accent-2) 90%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer 6s linear infinite;
+  }
+
+  p {
+    margin: 0 auto;
+    max-width: 32rem;
+    font-size: clamp(1rem, 2.5vw, 1.25rem);
+    font-weight: 300;
+    letter-spacing: 0.01em;
+    color: rgba(248, 250, 252, 0.75);
+  }
+
+  .rule {
+    width: 4.5rem;
+    height: 2px;
+    margin: 1.75rem auto;
+    border: 0;
+    background: linear-gradient(90deg, transparent, var(--accent), var(--accent-2), transparent);
+  }
+
+  @keyframes drift {
+    0%, 100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+    50% { transform: translate3d(2rem, 2.5rem, 0) scale(1.12); }
+  }
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(2rem); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes shimmer {
+    to { background-position: 200% center; }
+  }
+
+  @keyframes wave {
+    0%, 60%, 100% { transform: rotate(0deg); }
+    10%, 30% { transform: rotate(16deg); }
+    20%, 40% { transform: rotate(-8deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    body,
+    .orb,
+    main,
+    .wave,
+    h1 {
+      animation: none;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="orb one" aria-hidden="true"></div>
+  <div class="orb two" aria-hidden="true"></div>
+
+  <main>
+    <span class="wave" role="img" aria-label="Waving hand">👋</span>
+    <h1>Hello.</h1>
+    <hr class="rule" />
+    <p>So glad you stopped by — consider this a warm, pixel-perfect welcome.</p>
+  </main>
+</body>
+</html>
