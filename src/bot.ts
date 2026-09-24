@@ -2,6 +2,8 @@ import "dotenv/config";
 import { Telegraf } from "telegraf";
 import OpenAI from "openai";
 import { Octokit } from "@octokit/rest";
+import { addTodo, completeTodo, listTodos, removeTodo } from "./todo";
+import type { Todo } from "./todo";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -346,8 +348,70 @@ async function handlePrRequest(message: string): Promise<string> {
   return `Opened PR #${pr.number}: ${pr.html_url}`;
 }
 
+const TODO_USAGE =
+  "/todo <task> - add a task\n" +
+  "/todos - list all tasks\n" +
+  "/done <id> - mark a task complete\n" +
+  "/rm <id> - delete a task";
+
+function commandArg(text: string | undefined): string {
+  const raw = text ?? "";
+  const separator = raw.indexOf(" ");
+  return separator === -1 ? "" : raw.slice(separator + 1).trim();
+}
+
+function parseTodoId(arg: string): number | null {
+  const id = Number(arg.trim());
+  return Number.isInteger(id) && id > 0 ? id : null;
+}
+
+function formatTodoList(items: Todo[]): string {
+  if (items.length === 0) {
+    return `No todos yet.\n\n${TODO_USAGE}`;
+  }
+  return items.map((todo) => `${todo.done ? "[x]" : "[ ]"} #${todo.id} ${todo.text}`).join("\n");
+}
+
+bot.command("todo", async (ctx) => {
+  const text = commandArg(ctx.message?.text);
+  if (!text) {
+    await ctx.reply(`Usage: /todo <task>\n\n${TODO_USAGE}`);
+    return;
+  }
+  const todo = addTodo(text);
+  await ctx.reply(`Added todo #${todo.id}: ${todo.text}`);
+});
+
+bot.command("todos", async (ctx) => {
+  await ctx.reply(formatTodoList(listTodos()));
+});
+
+bot.command("done", async (ctx) => {
+  const id = parseTodoId(commandArg(ctx.message?.text));
+  if (id === null) {
+    await ctx.reply("Usage: /done <id>");
+    return;
+  }
+  const todo = completeTodo(id);
+  await ctx.reply(todo ? `Completed todo #${todo.id}: ${todo.text}` : `No todo with id ${id}.`);
+});
+
+bot.command("rm", async (ctx) => {
+  const id = parseTodoId(commandArg(ctx.message?.text));
+  if (id === null) {
+    await ctx.reply("Usage: /rm <id>");
+    return;
+  }
+  const todo = removeTodo(id);
+  await ctx.reply(todo ? `Deleted todo #${todo.id}: ${todo.text}` : `No todo with id ${id}.`);
+});
+
 bot.on("text", async (ctx) => {
   const message = ctx.message.text;
+  if (message.startsWith("/")) {
+    return; // bot commands are handled above
+  }
+
   const placeholder = await ctx.reply("Thinking...");
 
   let resultText: string;
