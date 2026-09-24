@@ -64,7 +64,7 @@ const TELEGRAM_FORMATTING_NOTE =
   "This text is shown directly in Telegram, not GitHub, so format it for Telegram's Markdown: " +
   "use *word* (single asterisks) for bold, _word_ for italic, no ## headers, no markdown tables, plain paragraphs.";
 
-type Intent = "chat" | "issue" | "pr";
+type Intent = "chat" | "issue" | "pr" | "weather";
 
 async function classifyIntent(message: string): Promise<Intent> {
   const completion = await deepseek.chat.completions.create({
@@ -75,11 +75,12 @@ async function classifyIntent(message: string): Promise<Intent> {
         role: "system",
         content:
           "Classify the developer's Telegram message into exactly one intent for a GitHub agent. " +
-          'Reply with ONLY a json object shaped like {"intent": "chat" | "issue" | "pr"}. ' +
+          'Reply with ONLY a json object shaped like {"intent": "chat" | "issue" | "pr" | "weather"}. ' +
           '"issue" = they want a bug/task tracked as a GitHub issue (reporting a problem, asking to file/log something). ' +
           '"pr" = they want an actual file/code change made and submitted as a pull request. ' +
+          '"weather" = they are asking about the current weather, temperature or forecast somewhere. ' +
           '"chat" = anything else: greetings, questions, general conversation, or anything unclear. ' +
-          'If you are not confident it is "issue" or "pr", choose "chat".',
+          'If you are not confident it is "issue", "pr" or "weather", choose "chat".',
       },
       { role: "user", content: message },
     ],
@@ -92,7 +93,7 @@ async function classifyIntent(message: string): Promise<Intent> {
 
   try {
     const parsed = JSON.parse(raw);
-    if (parsed.intent === "issue" || parsed.intent === "pr") {
+    if (parsed.intent === "issue" || parsed.intent === "pr" || parsed.intent === "weather") {
       return parsed.intent;
     }
   } catch {
@@ -346,6 +347,184 @@ async function handlePrRequest(message: string): Promise<string> {
   return `Opened PR #${pr.number}: ${pr.html_url}`;
 }
 
+// Weather lookup via Open-Meteo, which needs no API key. Always reported in Celsius.
+type Place = { label: string; latitude: number; longitude: number };
+
+type CurrentWeather = {
+  temperature_2m: number;
+  apparent_temperature: number;
+  weather_code: number;
+};
+
+const WEATHER_CODE_DESCRIPTIONS: Record<number, string> = {
+  0: "clear sky",
+  1: "mainly clear",
+  2: "partly cloudy",
+  3: "overcast",
+  45: "fog",
+  48: "depositing rime fog",
+  51: "light drizzle",
+  53: "moderate drizzle",
+  55: "dense drizzle",
+  56: "light freezing drizzle",
+  57: "dense freezing drizzle",
+  61: "slight rain",
+  63: "moderate rain",
+  65: "heavy rain",
+  66: "light freezing rain",
+  67: "heavy freezing rain",
+  71: "slight snowfall",
+  73: "moderate snowfall",
+  75: "heavy snowfall",
+  77: "snow grains",
+  80: "slight rain showers",
+  81: "moderate rain showers",
+  82: "violent rain showers",
+  85: "slight snow showers",
+  86: "heavy snow showers",
+  95: "thunderstorm",
+  96: "thunderstorm with slight hail",
+  99: "thunderstorm with heavy hail",
+};
+
+function describeWeatherCode(code: number): string {
+  return WEATHER_CODE_DESCRIPTIONS[code] ?? "unknown conditions";
+}
+
+async function fetchJson(url: string): Promise<unknown | null> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      console.error(`Weather request failed with status ${response.status}: ${url}`);
+      return null;
+    }
+    return await response.json();
+  } catch (err) {
+    console.error("Weather request failed:", err);
+    return null;
+  }
+}
+
+async function geocode(location: string): Promise<Place | null> {
+  const url =
+    "https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name=" +
+    encodeURIComponent(location);
+  const data = (await fetchJson(url)) as
+    | { results?: { name?: string; country?: string; latitude?: number; longitude?: number }[] }
+    | null;
+  const match = data?.results?.[0];
+  if (
+    !match ||
+    typeof match.name !== "string" ||
+    typeof match.latitude !== "number" ||
+    typeof match.longitude !== "number"
+  ) {
+    return null;
+  }
+  return {
+    label: match.country ? `${match.name}, ${match.country}` : match.name,
+    latitude: match.latitude,
+    longitude: match.longitude,
+  };
+}
+
+async function fetchCurrentWeather(place: Place): Promise<CurrentWeather | null> {
+  const url =
+    "https://api.open-meteo.com/v1/forecast?current=temperature_2m,apparent_temperature,weather_code" +
+    "&temperature_unit=celsius&timezone=auto" +
+    `&latitude=${place.latitude}&longitude=${place.longitude}`;
+  const data = (await fetchJson(url)) as { current?: Partial<CurrentWeather> } | null;
+  const current = data?.current;
+  if (
+    !current ||
+    typeof current.temperature_2m !== "number" ||
+    typeof current.apparent_temperature !== "number" ||
+    typeof current.weather_code !== "number"
+  ) {
+    return null;
+  }
+  return {
+    temperature_2m: current.temperature_2m,
+    apparent_temperature: current.apparent_temperature,
+    weather_code: current.weather_code,
+  };
+}
+
+function roundToTenth(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+async function describeWeather(location: string): Promise<string> {
+  const place = await geocode(location);
+  if (!place) {
+    return `Couldn't find a place called "${location}". Try a city name, like _weather in Lisbon_.`;
+  }
+
+  const current = await fetchCurrentWeather(place);
+  if (!current) {
+    return `Couldn't fetch the weather for ${place.label} right now. Try again in a minute.`;
+  }
+
+  return (
+    `*${place.label}*: ${roundToTenth(current.temperature_2m)}°C ` +
+    `(feels like ${roundToTenth(current.apparent_temperature)}°C), ${describeWeatherCode(current.weather_code)}.`
+  );
+}
+
+function fallbackLocation(message: string): string | null {
+  const cleaned = message
+    .replace(/[?!.,]+$/g, "")
+    .replace(/\b(what'?s|whats|what is|how'?s|hows|how is|tell me|is it)\b/gi, " ")
+    .replace(/\b(the\s+)?(weather|temperature|temp|forecast)\b/gi, " ")
+    .replace(/\b(like|in|at|for|around|near|today|now|currently|right now|degrees?|celsius)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.length > 0 ? cleaned : null;
+}
+
+async function interpretAsWeather(message: string): Promise<string | null> {
+  const completion = await deepseek.chat.completions.create({
+    model: "deepseek-v4-flash",
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content:
+          "Extract the place a developer is asking about the weather for. Reply with ONLY a json object " +
+          'shaped like {"location": "city name"} — just the place, nothing else. If no place is mentioned, ' +
+          'reply {"location": null}.',
+      },
+      { role: "user", content: message },
+    ],
+  });
+
+  const raw = completion.choices[0]?.message?.content;
+  if (!raw) {
+    return fallbackLocation(message);
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.location === "string" && parsed.location.trim()) {
+      return parsed.location.trim();
+    }
+    if (parsed.location === null) {
+      return null;
+    }
+  } catch {
+    // falls through to the heuristic fallback below
+  }
+  return fallbackLocation(message);
+}
+
+async function handleWeatherRequest(message: string): Promise<string> {
+  const location = await interpretAsWeather(message);
+  if (!location) {
+    return "Which city? Try something like _weather in Lisbon_.";
+  }
+  return describeWeather(location);
+}
+
 bot.on("text", async (ctx) => {
   const message = ctx.message.text;
   const placeholder = await ctx.reply("Thinking...");
@@ -357,6 +536,8 @@ bot.on("text", async (ctx) => {
       resultText = await handleIssueRequest(message);
     } else if (intent === "pr") {
       resultText = await handlePrRequest(message);
+    } else if (intent === "weather") {
+      resultText = await handleWeatherRequest(message);
     } else {
       resultText = await handleChat(message);
     }
@@ -374,3 +555,4 @@ bot.on("text", async (ctx) => {
     await ctx.telegram.editMessageText(ctx.chat.id, placeholder.message_id, undefined, resultText);
   }
 });
+
