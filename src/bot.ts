@@ -346,8 +346,37 @@ async function handlePrRequest(message: string): Promise<string> {
   return `Opened PR #${pr.number}: ${pr.html_url}`;
 }
 
+// Hello app: the user first gives their name, then the bot greets them by it.
+// `/hello` (or `/start`) starts the flow; the next text message is read as the name.
+const awaitingName = new Set<number>();
+
+async function askForName(ctx: { from?: { id: number }; reply: (text: string) => Promise<unknown> }): Promise<void> {
+  const senderId = ctx.from?.id;
+  if (senderId === undefined) {
+    return;
+  }
+  awaitingName.add(senderId);
+  await ctx.reply("Hi! What's your name?");
+}
+
+function greetByName(name: string): string {
+  const trimmed = name.trim();
+  return trimmed ? `Hello, ${trimmed}!` : "Hello there!";
+}
+
+bot.command(["hello", "start"], askForName);
+
 bot.on("text", async (ctx) => {
   const message = ctx.message.text;
+  const senderId = ctx.from?.id;
+
+  // The name is taken as input first, then the user is greeted with it.
+  if (senderId !== undefined && awaitingName.has(senderId)) {
+    awaitingName.delete(senderId);
+    await ctx.reply(greetByName(message));
+    return;
+  }
+
   const placeholder = await ctx.reply("Thinking...");
 
   let resultText: string;
