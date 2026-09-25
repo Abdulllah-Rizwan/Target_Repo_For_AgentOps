@@ -64,7 +64,7 @@ const TELEGRAM_FORMATTING_NOTE =
   "This text is shown directly in Telegram, not GitHub, so format it for Telegram's Markdown: " +
   "use *word* (single asterisks) for bold, _word_ for italic, no ## headers, no markdown tables, plain paragraphs.";
 
-type Intent = "chat" | "issue" | "pr";
+type Intent = "chat" | "calorie" | "issue" | "pr";
 
 async function classifyIntent(message: string): Promise<Intent> {
   const completion = await deepseek.chat.completions.create({
@@ -75,11 +75,12 @@ async function classifyIntent(message: string): Promise<Intent> {
         role: "system",
         content:
           "Classify the developer's Telegram message into exactly one intent for a GitHub agent. " +
-          'Reply with ONLY a json object shaped like {"intent": "chat" | "issue" | "pr"}. ' +
+          'Reply with ONLY a json object shaped like {"intent": "chat" | "calorie" | "issue" | "pr"}. ' +
           '"issue" = they want a bug/task tracked as a GitHub issue (reporting a problem, asking to file/log something). ' +
           '"pr" = they want an actual file/code change made and submitted as a pull request. ' +
+          '"calorie" = they are logging food or drink they consumed, or asking about the calories they have logged. ' +
           '"chat" = anything else: greetings, questions, general conversation, or anything unclear. ' +
-          'If you are not confident it is "issue" or "pr", choose "chat".',
+          'If you are not confident it is "issue", "pr" or "calorie", choose "chat".',
       },
       { role: "user", content: message },
     ],
@@ -92,7 +93,7 @@ async function classifyIntent(message: string): Promise<Intent> {
 
   try {
     const parsed = JSON.parse(raw);
-    if (parsed.intent === "issue" || parsed.intent === "pr") {
+    if (parsed.intent === "calorie" || parsed.intent === "issue" || parsed.intent === "pr") {
       return parsed.intent;
     }
   } catch {
@@ -286,6 +287,88 @@ async function handleChat(message: string): Promise<string> {
   return reply ?? "DeepSeek returned an empty response.";
 }
 
+type CalorieEntry = {
+  description: string;
+  calories: number;
+  loggedAt: number;
+};
+
+// Basic in-memory calorie log, keyed by Telegram user ID - restarting the bot clears it.
+const calorieLog = new Map<number, CalorieEntry[]>();
+
+function entriesToday(userId: number): CalorieEntry[] {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  return (calorieLog.get(userId) ?? []).filter((entry) => entry.loggedAt >= startOfDay.getTime());
+}
+
+function addCalorieEntry(userId: number, description: string, calories: number): void {
+  const entries = calorieLog.get(userId) ?? [];
+  entries.push({ description, calories, loggedAt: Date.now() });
+  calorieLog.set(userId, entries);
+}
+
+function formatCalorieSummary(userId: number): string {
+  const entries = entriesToday(userId);
+  if (entries.length === 0) {
+    return "Nothing logged today yet - tell me what you ate and I'll keep track of the calories.";
+  }
+
+  const total = entries.reduce((sum, entry) => sum + entry.calories, 0);
+  const lines = entries.map((entry) => `- ${entry.description}: ${entry.calories} cal`);
+  return `Today: *${total} cal* across ${entries.length} ${entries.length === 1 ? "entry" : "entries"}\n${lines.join("\n")}`;
+}
+
+async function parseCalorieEntry(message: string): Promise<{ description: string; calories: number } | null> {
+  const completion = await deepseek.chat.completions.create({
+    model: "deepseek-v4-flash",
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content:
+          "You turn a Telegram message into one food log entry for a basic calorie tracker. If the message " +
+          'reports something the person ate or drank, reply with ONLY a json object shaped like {"description": ' +
+          '"short food description", "calories": number}, estimating a realistic calorie count when they did not ' +
+          'state one and never returning a negative or zero number. If the message does not report any food or ' +
+          'drink at all (for example a question about their totals), reply {"description": null, "calories": null}.',
+      },
+      { role: "user", content: message },
+    ],
+  });
+
+  const raw = completion.choices[0]?.message?.content;
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      typeof parsed.description === "string" &&
+      parsed.description.trim() &&
+      typeof parsed.calories === "number" &&
+      Number.isFinite(parsed.calories) &&
+      parsed.calories > 0
+    ) {
+      return { description: parsed.description.trim(), calories: Math.round(parsed.calories) };
+    }
+  } catch {
+    // falls through to the summary-only handling below
+  }
+  return null;
+}
+
+async function handleCalorieRequest(userId: number, message: string): Promise<string> {
+  const entry = await parseCalorieEntry(message);
+  if (!entry) {
+    return formatCalorieSummary(userId);
+  }
+
+  addCalorieEntry(userId, entry.description, entry.calories);
+  return `Logged *${entry.description}* - ${entry.calories} cal\n${formatCalorieSummary(userId)}`;
+}
+
 async function handleIssueRequest(message: string): Promise<string> {
   const { title, body } = await interpretAsIssue(message);
   const issue = await octokit.rest.issues.create({ owner: githubOwner, repo: githubRepo, title, body });
@@ -357,6 +440,8 @@ bot.on("text", async (ctx) => {
       resultText = await handleIssueRequest(message);
     } else if (intent === "pr") {
       resultText = await handlePrRequest(message);
+    } else if (intent === "calorie") {
+      resultText = await handleCalorieRequest(ctx.from?.id ?? 0, message);
     } else {
       resultText = await handleChat(message);
     }
