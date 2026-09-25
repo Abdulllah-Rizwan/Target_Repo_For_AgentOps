@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Morning Greeter</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(160deg, #ffe29f 0%, #ffa99f 48%, #ff719a 100%);
+      color: #2b2b2b;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.9);
+      padding: 2.5rem 3rem;
+      border-radius: 16px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+      text-align: center;
+      max-width: 420px;
+      width: calc(100% - 2rem);
+    }
+
+    h1 {
+      margin: 0 0 0.5rem;
+      font-size: 1.6rem;
+    }
+
+    .greeting {
+      font-size: 1.25rem;
+      margin: 0.5rem 0 1.25rem;
+    }
+
+    .clock {
+      font-variant-numeric: tabular-nums;
+      font-size: 0.95rem;
+      color: #666;
+      margin-bottom: 1.5rem;
+    }
+
+    form {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+
+    input {
+      flex: 1;
+      padding: 0.6rem 0.75rem;
+      font-size: 1rem;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+    }
+
+    button {
+      padding: 0.6rem 1rem;
+      font-size: 1rem;
+      border: none;
+      border-radius: 8px;
+      background: #ff719a;
+      color: #fff;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: #e85c85;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Morning Greeter</h1>
+    <p class="greeting" id="greeting">Good morning!</p>
+    <p class="clock" id="clock"></p>
+    <form id="greet-form">
+      <input id="name" type="text" placeholder="Your name" autocomplete="name" />
+      <button type="submit">Greet</button>
+    </form>
+  </main>
+
+  <script>
+    const greetingEl = document.getElementById('greeting');
+    const clockEl = document.getElementById('clock');
+    const form = document.getElementById('greet-form');
+    const nameInput = document.getElementById('name');
+
+    function partOfDay(hour) {
+      if (hour < 12) return 'morning';
+      if (hour < 18) return 'afternoon';
+      return 'evening';
+    }
+
+    let savedName = '';
+    try {
+      savedName = localStorage.getItem('morning-greeter-name') || '';
+    } catch (err) {
+      savedName = '';
+    }
+
+    function render(name) {
+      const now = new Date();
+      const part = partOfDay(now.getHours());
+      const who = name ? `, ${name}` : '';
+      greetingEl.textContent = `Good ${part}${who}!`;
+      clockEl.textContent = now.toLocaleTimeString();
+    }
+
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const name = nameInput.value.trim();
+      try {
+        localStorage.setItem('morning-greeter-name', name);
+      } catch (err) {
+        // storage may be unavailable; greeting still works
+      }
+      render(name);
+    });
+
+    nameInput.value = savedName;
+    render(savedName);
+    setInterval(() => render(nameInput.value.trim()), 1000);
+  </script>
+</body>
+</html>
