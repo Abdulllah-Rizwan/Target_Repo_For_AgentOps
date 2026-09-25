@@ -2,6 +2,7 @@ import "dotenv/config";
 import { Telegraf } from "telegraf";
 import OpenAI from "openai";
 import { Octokit } from "@octokit/rest";
+import { todoList } from "./todo";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
@@ -64,7 +65,7 @@ const TELEGRAM_FORMATTING_NOTE =
   "This text is shown directly in Telegram, not GitHub, so format it for Telegram's Markdown: " +
   "use *word* (single asterisks) for bold, _word_ for italic, no ## headers, no markdown tables, plain paragraphs.";
 
-type Intent = "chat" | "issue" | "pr";
+type Intent = "chat" | "issue" | "pr" | "todo";
 
 async function classifyIntent(message: string): Promise<Intent> {
   const completion = await deepseek.chat.completions.create({
@@ -75,11 +76,12 @@ async function classifyIntent(message: string): Promise<Intent> {
         role: "system",
         content:
           "Classify the developer's Telegram message into exactly one intent for a GitHub agent. " +
-          'Reply with ONLY a json object shaped like {"intent": "chat" | "issue" | "pr"}. ' +
+          'Reply with ONLY a json object shaped like {"intent": "chat" | "issue" | "pr" | "todo"}. ' +
           '"issue" = they want a bug/task tracked as a GitHub issue (reporting a problem, asking to file/log something). ' +
           '"pr" = they want an actual file/code change made and submitted as a pull request. ' +
+          '"todo" = they want to manage their personal to-do list (add a task, show their tasks, mark one done, delete one). ' +
           '"chat" = anything else: greetings, questions, general conversation, or anything unclear. ' +
-          'If you are not confident it is "issue" or "pr", choose "chat".',
+          'If you are not confident it is "issue", "pr" or "todo", choose "chat".',
       },
       { role: "user", content: message },
     ],
@@ -92,7 +94,7 @@ async function classifyIntent(message: string): Promise<Intent> {
 
   try {
     const parsed = JSON.parse(raw);
-    if (parsed.intent === "issue" || parsed.intent === "pr") {
+    if (parsed.intent === "issue" || parsed.intent === "pr" || parsed.intent === "todo") {
       return parsed.intent;
     }
   } catch {
@@ -346,8 +348,97 @@ async function handlePrRequest(message: string): Promise<string> {
   return `Opened PR #${pr.number}: ${pr.html_url}`;
 }
 
+type TodoAction =
+  | { action: "add"; text: string }
+  | { action: "list" }
+  | { action: "complete"; id: number }
+  | { action: "remove"; id: number };
+
+async function interpretTodoAction(message: string): Promise<TodoAction> {
+  const current = todoList.list();
+  const currentSummary = current.length
+    ? current.map((todo) => `${todo.id}. ${todo.text}${todo.done ? " (done)" : ""}`).join("\n")
+    : "(the list is empty)";
+
+  const completion = await deepseek.chat.completions.create({
+    model: "deepseek-v4-flash",
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content:
+          "You translate a developer's Telegram message into a single action on their personal to-do list. " +
+          "Reply with ONLY a json object, exactly one of these shapes:\n" +
+          '{"action": "add", "text": "the task to add"}\n' +
+          '{"action": "list"}\n' +
+          '{"action": "complete", "id": <number of the existing todo to mark done>}\n' +
+          '{"action": "remove", "id": <number of the existing todo to delete>}\n' +
+          'Use the current to-do list below to work out which item the user means. If the message does not ' +
+          'clearly ask to add, complete or remove something, reply {"action": "list"}.\n\n' +
+          `Current to-do list:\n${currentSummary}`,
+      },
+      { role: "user", content: message },
+    ],
+  });
+
+  const raw = completion.choices[0]?.message?.content;
+  if (!raw) {
+    return { action: "list" };
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed.action === "add" && typeof parsed.text === "string" && parsed.text.trim()) {
+      return { action: "add", text: parsed.text };
+    }
+    if (parsed.action === "complete" && typeof parsed.id === "number") {
+      return { action: "complete", id: parsed.id };
+    }
+    if (parsed.action === "remove" && typeof parsed.id === "number") {
+      return { action: "remove", id: parsed.id };
+    }
+  } catch {
+    // falls through to listing the todos below
+  }
+  return { action: "list" };
+}
+
+async function handleTodoRequest(message: string): Promise<string> {
+  const action = await interpretTodoAction(message);
+
+  if (action.action === "add") {
+    const todo = todoList.add(action.text);
+    return `Added todo #${todo.id}: ${todo.text}\n\n${todoList.format()}`;
+  }
+
+  if (action.action === "complete") {
+    const todo = todoList.complete(action.id);
+    if (!todo) {
+      return `I couldn't find a todo #${action.id}.\n\n${todoList.format()}`;
+    }
+    return `Marked todo #${todo.id} as done: ${todo.text}\n\n${todoList.format()}`;
+  }
+
+  if (action.action === "remove") {
+    if (!todoList.remove(action.id)) {
+      return `I couldn't find a todo #${action.id}.\n\n${todoList.format()}`;
+    }
+    return `Removed todo #${action.id}.\n\n${todoList.format()}`;
+  }
+
+  return todoList.format();
+}
+
+bot.command("todos", async (ctx) => {
+  await ctx.reply(todoList.format());
+});
+
 bot.on("text", async (ctx) => {
   const message = ctx.message.text;
+  if (message.startsWith("/")) {
+    return; // handled by a dedicated command above
+  }
+
   const placeholder = await ctx.reply("Thinking...");
 
   let resultText: string;
@@ -357,6 +448,8 @@ bot.on("text", async (ctx) => {
       resultText = await handleIssueRequest(message);
     } else if (intent === "pr") {
       resultText = await handlePrRequest(message);
+    } else if (intent === "todo") {
+      resultText = await handleTodoRequest(message);
     } else {
       resultText = await handleChat(message);
     }
